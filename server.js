@@ -11,7 +11,6 @@ app.use(express.json());
 
 const googleClient = new OAuth2Client();
 
-// CONFIGURAÇÃO DO NODEMAILER
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -31,7 +30,6 @@ transporter.verify((error) => {
   }
 });
 
-// Rota de Status da API
 app.get('/api/status', (req, res) => {
   res.json({ mensagem: 'A API do GatherTech está online e a escutar!' });
 });
@@ -40,24 +38,18 @@ app.get('/api/status', (req, res) => {
 // ROTAS DE AUTENTICAÇÃO E USUÁRIOS
 // ==========================================
 
-// ROTA POST: Login com Google
 app.post('/api/auth/google', async (req, res) => {
   const { email, name, googleId } = req.body;
-
-  if (!email) {
-    return res.status(400).json({ erro: 'O e-mail do Google é obrigatório.' });
-  }
+  if (!email) return res.status(400).json({ erro: 'O e-mail do Google é obrigatório.' });
 
   try {
     const emailTratado = email.toLowerCase().trim();
-
     let resultado = await db.query(
       'SELECT id_usuario, nome_usuario, email, tipo_usuario FROM Usuarios WHERE LOWER(TRIM(email)) = $1',
       [emailTratado]
     );
 
     let usuarioLogado;
-
     if (resultado.rows.length === 0) {
       const novoUsuario = await db.query(
         `INSERT INTO Usuarios (nome_usuario, email, senha, data_nascimento, telefone, cpf_cnpj, tipo_usuario)
@@ -66,187 +58,53 @@ app.post('/api/auth/google', async (req, res) => {
         [name || 'Usuário Google', emailTratado, 'AUTH_SOCIAL_GOOGLE', googleId || 'GOOGLE_USER']
       );
       usuarioLogado = novoUsuario.rows[0];
-      console.log(`✅ Novo cadastro via Google realizado: ${emailTratado}`);
     } else {
       usuarioLogado = resultado.rows[0];
-      console.log(`✅ Login via Google efetuado com sucesso: ${emailTratado}`);
     }
 
-    return res.json({
-      mensagem: 'Autenticado com sucesso via Google!',
-      usuario: usuarioLogado
-    });
-
+    return res.json({ mensagem: 'Autenticado com sucesso via Google!', usuario: usuarioLogado });
   } catch (err) {
     console.error('❌ Erro no login social Google:', err);
     return res.status(500).json({ erro: 'Erro interno ao autenticar com o Google.' });
   }
 });
 
-// ROTA POST: Login Tradicional
 app.post('/api/login', async (req, res) => {
   const { email, senha } = req.body;
-
-  if (!email || !senha) {
-    return res.status(400).json({ erro: 'E-mail e senha são obrigatórios.' });
-  }
+  if (!email || !senha) return res.status(400).json({ erro: 'E-mail e senha são obrigatórios.' });
 
   const emailTratado = email.toLowerCase().trim();
-
   try {
-    const sql = `
-      SELECT id_usuario, nome_usuario, email, tipo_usuario 
-      FROM Usuarios 
-      WHERE LOWER(TRIM(email)) = $1 AND senha = $2;
-    `;
+    const sql = `SELECT id_usuario, nome_usuario, email, tipo_usuario, foto_perfil FROM Usuarios WHERE LOWER(TRIM(email)) = $1 AND senha = $2;`;
     const resultado = await db.query(sql, [emailTratado, senha.trim()]);
 
-    if (resultado.rows.length === 0) {
-      return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
-    }
+    if (resultado.rows.length === 0) return res.status(401).json({ erro: 'E-mail ou senha incorretos.' });
 
-    res.json({
-      mensagem: 'Login efetuado com sucesso!',
-      usuario: resultado.rows[0]
-    });
+    res.json({ mensagem: 'Login efetuado com sucesso!', usuario: resultado.rows[0] });
   } catch (err) {
     console.error('Erro ao efetuar login:', err);
     res.status(500).json({ erro: 'Erro ao validar login na base de dados.' });
   }
 });
 
-// ROTA POST: Cadastro de Usuário
 app.post('/api/cadastro', async (req, res) => {
-  const { 
-    nome_usuario, email, senha, data_nascimento, telefone, cpf_cnpj, tipo_usuario = 'aluno' 
-  } = req.body;
-
+  const { nome_usuario, email, senha, data_nascimento, telefone, cpf_cnpj, tipo_usuario = 'aluno' } = req.body;
   if (!nome_usuario || !email || !senha || !data_nascimento || !telefone || !cpf_cnpj) {
     return res.status(400).json({ erro: 'Todos os campos são obrigatórios.' });
   }
 
   const emailTratado = email.toLowerCase().trim();
-
   try {
     const verificarEmail = await db.query('SELECT email FROM Usuarios WHERE LOWER(TRIM(email)) = $1', [emailTratado]);
-    if (verificarEmail.rows.length > 0) {
-      return res.status(400).json({ erro: 'Este e-mail já está em uso por outra conta.' });
-    }
+    if (verificarEmail.rows.length > 0) return res.status(400).json({ erro: 'Este e-mail já está em uso.' });
 
-    const sql = `
-      INSERT INTO Usuarios (nome_usuario, email, senha, data_nascimento, telefone, cpf_cnpj, tipo_usuario)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING id_usuario, nome_usuario, email, tipo_usuario;
-    `;
-    
-    const valores = [nome_usuario.trim(), emailTratado, senha.trim(), data_nascimento, telefone, cpf_cnpj, tipo_usuario];
-    const resultado = await db.query(sql, valores);
+    const sql = `INSERT INTO Usuarios (nome_usuario, email, senha, data_nascimento, telefone, cpf_cnpj, tipo_usuario) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id_usuario, nome_usuario, email, tipo_usuario;`;
+    const resultado = await db.query(sql, [nome_usuario.trim(), emailTratado, senha.trim(), data_nascimento, telefone, cpf_cnpj, tipo_usuario]);
 
-    res.status(201).json({
-      mensagem: 'Conta criada com sucesso!',
-      usuario: resultado.rows[0]
-    });
+    res.status(201).json({ mensagem: 'Conta criada com sucesso!', usuario: resultado.rows[0] });
   } catch (err) {
-    console.error('Erro ao cadastrar utilizador:', err);
-    res.status(500).json({ erro: 'Erro ao guardar o utilizador na base de dados.' });
-  }
-});
-
-// ROTAS DE RECUPERAÇÃO DE SENHA
-app.post('/api/recuperar-senha', async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ erro: 'Por favor, informe o e-mail.' });
-
-  try {
-    const emailTratado = email.toLowerCase().trim();
-    const resultado = await db.query(
-      'SELECT id_usuario, nome_usuario, email FROM Usuarios WHERE LOWER(TRIM(email)) = $1',
-      [emailTratado]
-    );
-
-    if (resultado.rows.length === 0) {
-      return res.status(404).json({ erro: 'Nenhuma conta encontrada com este e-mail.' });
-    }
-
-    const usuario = resultado.rows[0];
-    const codigo = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiracao = new Date(Date.now() + 15 * 60 * 1000);
-
-    await db.query(
-      'UPDATE Usuarios SET codigo_recuperacao = $1, codigo_expiracao = $2 WHERE id_usuario = $3',
-      [codigo, expiracao, usuario.id_usuario]
-    );
-
-    const mailOptions = {
-      from: '"GatherTech" <engtailon@gmail.com>',
-      to: usuario.email,
-      subject: `${codigo} é o seu código de recuperação - GatherTech`,
-      html: `
-        <div style="font-family: Arial, sans-serif; color: #333; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-          <h2 style="color: #0066FF;">GatherTech</h2>
-          <p>Olá, <strong>${usuario.nome_usuario}</strong>!</p>
-          <p>Utilize o código de verificação abaixo para continuar no aplicativo:</p>
-          <div style="background-color: #F3F4F6; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
-            <span style="font-size: 36px; font-weight: bold; letter-spacing: 8px; color: #0066FF;">${codigo}</span>
-          </div>
-          <p style="font-size: 13px; color: #666;">Este código é válido por <strong>15 minutos</strong>.</p>
-        </div>
-      `
-    };
-
-    await transporter.sendMail(mailOptions);
-    return res.json({ sucesso: true, mensagem: 'Código enviado com sucesso!' });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ erro: 'Não foi possível enviar o e-mail.' });
-  }
-});
-
-app.post('/api/validar-codigo', async (req, res) => {
-  const { email, codigo } = req.body;
-  if (!email || !codigo) return res.status(400).json({ erro: 'Campos obrigatórios ausentes.' });
-
-  try {
-    const resultado = await db.query(
-      `SELECT id_usuario FROM Usuarios 
-       WHERE LOWER(TRIM(email)) = $1 AND codigo_recuperacao = $2 AND codigo_expiracao > NOW()`,
-      [email.toLowerCase().trim(), codigo.trim()]
-    );
-
-    if (resultado.rows.length === 0) {
-      return res.status(400).json({ erro: 'Código inválido ou expirado.' });
-    }
-
-    return res.json({ sucesso: true, mensagem: 'Código válido!' });
-  } catch (err) {
-    return res.status(500).json({ erro: 'Erro interno.' });
-  }
-});
-
-app.post('/api/redefinir-senha', async (req, res) => {
-  const { email, codigo, novaSenha } = req.body;
-  if (!email || !codigo || !novaSenha) return res.status(400).json({ erro: 'Campos obrigatórios.' });
-
-  try {
-    const emailTratado = email.toLowerCase().trim();
-    const resultado = await db.query(
-      `SELECT id_usuario FROM Usuarios 
-       WHERE LOWER(TRIM(email)) = $1 AND codigo_recuperacao = $2 AND codigo_expiracao > NOW()`,
-      [emailTratado, codigo.trim()]
-    );
-
-    if (resultado.rows.length === 0) {
-      return res.status(400).json({ erro: 'Sessão expirada.' });
-    }
-
-    await db.query(
-      `UPDATE Usuarios SET senha = $1, codigo_recuperacao = NULL, codigo_expiracao = NULL WHERE LOWER(TRIM(email)) = $2`,
-      [novaSenha.trim(), emailTratado]
-    );
-
-    return res.json({ sucesso: true, mensagem: 'Senha alterada com sucesso!' });
-  } catch (err) {
-    return res.status(500).json({ erro: 'Erro ao atualizar a senha.' });
+    console.error('Erro ao cadastrar:', err);
+    res.status(500).json({ erro: 'Erro ao guardar o utilizador.' });
   }
 });
 
@@ -254,72 +112,97 @@ app.post('/api/redefinir-senha', async (req, res) => {
 // ROTAS DE GESTÃO DE EVENTOS (CRUD COMPLETO)
 // ==========================================
 
-// Listar todos os eventos
 app.get('/api/eventos', async (req, res) => {
   try {
-    const resultado = await db.query('SELECT * FROM Eventos ORDER BY id_evento DESC');
+    const sql = `
+      SELECT e.*, 
+             COALESCE(
+               (SELECT ROUND(AVG(sub.ultima_nota), 1) 
+                FROM (
+                  SELECT DISTINCT ON (c.id_usuario) c.nota_avaliacao AS ultima_nota
+                  FROM ComentariosEventos c
+                  WHERE c.id_evento = e.id_evento AND c.nota_avaliacao IS NOT NULL
+                  ORDER BY c.id_usuario, c.id_comentario DESC
+                ) sub), 0.0
+             ) AS media_avaliacao
+      FROM Eventos e
+      ORDER BY e.id_evento DESC;
+    `;
+    const resultado = await db.query(sql);
     res.json(resultado.rows);
   } catch (err) {
+    console.error('Erro ao buscar eventos:', err);
     res.status(500).json({ erro: 'Erro ao buscar eventos.' });
   }
 });
 
-// Cadastrar novo evento
 app.post('/api/eventos', async (req, res) => {
   const {
-    nome_evento, imagem, modalidade, data_inicio, horario_inicio,
-    descricao_evento, data_fim, horario_fim, tipo_ingresso, nome_produtor,
-    descricao_produtor, url_inscricao, id_tipo_evento = 1 
+    nome_evento, imagem, galeria_imagens, modalidade, cidade, estado, cep, bairro, rua_numero,
+    data_inicio, horario_inicio, data_fim, horario_fim, descricao_evento,
+    tipo_ingresso, tech, plataforma_online, url_inscricao, nome_produtor,
+    descricao_produtor, id_tipo_evento = 1 
   } = req.body;
 
   try {
+    const dataTratada = data_inicio && data_inicio.trim() !== '' ? data_inicio : new Date().toISOString().split('T')[0];
+    const horaTratada = horario_inicio && horario_inicio.trim() !== '' ? horario_inicio : '08:00:00';
+    const descricaoTratada = descricao_evento && descricao_evento.trim() !== '' ? descricao_evento : 'Evento sem descrição informada.';
+    const galeriaString = galeria_imagens ? JSON.stringify(galeria_imagens) : null;
+
     const sql = `
       INSERT INTO Eventos (
-        id_tipo_evento, nome_evento, imagem, modalidade, data_inicio, horario_inicio,
-        descricao_evento, data_fim, horario_fim, tipo_ingresso, nome_produtor,
-        descricao_produtor, url_inscricao, data_publicacao
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+        id_tipo_evento, nome_evento, imagem, galeria_imagens, modalidade, cidade, estado, cep, bairro, rua_numero,
+        data_inicio, horario_inicio, data_fim, horario_fim, descricao_evento,
+        tipo_ingresso, tech, plataforma_online, url_inscricao, nome_produtor, descricao_produtor, data_publicacao
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW())
       RETURNING *;
     `;
 
     const valores = [
-      id_tipo_evento, nome_evento,
+      id_tipo_evento, nome_evento, 
       imagem || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&q=80&w=600',
-      modalidade || 'Presencial', data_inicio, horario_inicio, descricao_evento,
-      data_fim, horario_fim, tipo_ingresso || 'Gratuito', nome_produtor,
-      descricao_produtor, url_inscricao
+      galeriaString,
+      modalidade || 'Presencial', cidade || 'Salvador', estado, cep, bairro, rua_numero,
+      dataTratada, horaTratada, data_fim || null, horario_fim || null, descricaoTratada,
+      tipo_ingresso || 'Gratuito', tech, plataforma_online, url_inscricao, nome_produtor, descricao_produtor
     ];
 
     const resultado = await db.query(sql, valores);
-    res.status(201).json({ mensagem: 'Evento criado!', evento: resultado.rows[0] });
+    res.status(201).json({ mensagem: 'Evento criado com sucesso!', evento: resultado.rows[0] });
   } catch (err) {
+    console.error('Erro ao criar evento:', err);
     res.status(500).json({ erro: 'Erro ao criar evento.' });
   }
 });
 
-// Atualizar evento existente (Editar)
 app.put('/api/eventos/:id', async (req, res) => {
   const { id } = req.params;
   const {
-    nome_evento, imagem, modalidade, data_inicio, horario_inicio,
-    descricao_evento, data_fim, horario_fim, tipo_ingresso, nome_produtor,
-    descricao_produtor, url_inscricao
+    nome_evento, imagem, galeria_imagens, modalidade, cidade, estado, cep, bairro, rua_numero,
+    data_inicio, horario_inicio, data_fim, horario_fim, descricao_evento,
+    tipo_ingresso, tech, plataforma_online, url_inscricao, nome_produtor, descricao_produtor
   } = req.body;
 
   try {
+    const descricaoTratada = descricao_evento && descricao_evento.trim() !== '' ? descricao_evento : 'Evento sem descrição informada.';
+    const galeriaString = galeria_imagens ? JSON.stringify(galeria_imagens) : null;
+
     const sql = `
       UPDATE Eventos SET
-        nome_evento = $1, imagem = $2, modalidade = $3, data_inicio = $4, horario_inicio = $5,
-        descricao_evento = $6, data_fim = $7, horario_fim = $8, tipo_ingresso = $9, nome_produtor = $10,
-        descricao_produtor = $11, url_inscricao = $12
-      WHERE id_evento = $13
+        nome_evento = $1, imagem = $2, galeria_imagens = $3, modalidade = $4, cidade = $5, estado = $6, cep = $7,
+        bairro = $8, rua_numero = $9, data_inicio = $10, horario_inicio = $11, data_fim = $12, horario_fim = $13,
+        descricao_evento = $14, tipo_ingresso = $15, tech = $16, plataforma_online = $17,
+        url_inscricao = $18, nome_produtor = $19, descricao_produtor = $20
+      WHERE id_evento = $21
       RETURNING *;
     `;
 
     const valores = [
-      nome_evento, imagem, modalidade, data_inicio, horario_inicio,
-      descricao_evento, data_fim, horario_fim, tipo_ingresso, nome_produtor,
-      descricao_produtor, url_inscricao, id
+      nome_evento, imagem, galeriaString, modalidade, cidade || 'Salvador', estado, cep,
+      bairro, rua_numero, data_inicio, horario_inicio, data_fim || null, horario_fim || null,
+      descricaoTratada, tipo_ingresso, tech, plataforma_online,
+      url_inscricao, nome_produtor, descricao_produtor, id
     ];
 
     const resultado = await db.query(sql, valores);
@@ -330,10 +213,8 @@ app.put('/api/eventos/:id', async (req, res) => {
   }
 });
 
-// Excluir evento
 app.delete('/api/eventos/:id', async (req, res) => {
   const { id } = req.params;
-
   try {
     await db.query('DELETE FROM Eventos WHERE id_evento = $1', [id]);
     res.json({ mensagem: 'Evento excluído com sucesso!' });
@@ -347,12 +228,10 @@ app.delete('/api/eventos/:id', async (req, res) => {
 // ROTAS EXCLUSIVAS DE ADMINISTRAÇÃO PAINEL
 // ==========================================
 
-// Consultar Métricas Gerais do App
 app.get('/api/admin/metricas', async (req, res) => {
   try {
     const totalUsuarios = await db.query('SELECT COUNT(*) FROM Usuarios');
     const totalEventos = await db.query('SELECT COUNT(*) FROM Eventos');
-
     res.json({
       totalUsuarios: parseInt(totalUsuarios.rows[0].count, 10),
       totalEventos: parseInt(totalEventos.rows[0].count, 10),
@@ -364,12 +243,9 @@ app.get('/api/admin/metricas', async (req, res) => {
   }
 });
 
-// Listar todos os usuários para o Painel Admin
 app.get('/api/admin/usuarios', async (req, res) => {
   try {
-    const resultado = await db.query(
-      'SELECT id_usuario, nome_usuario, email, tipo_usuario, telefone FROM Usuarios ORDER BY id_usuario DESC'
-    );
+    const resultado = await db.query('SELECT id_usuario, nome_usuario, email, tipo_usuario, telefone FROM Usuarios ORDER BY id_usuario DESC');
     res.json(resultado.rows);
   } catch (err) {
     console.error('Erro ao buscar usuários:', err);
@@ -377,37 +253,209 @@ app.get('/api/admin/usuarios', async (req, res) => {
   }
 });
 
-// Atualizar permissões/dados do usuário pelo Admin
-app.put('/api/admin/usuarios/:id', async (req, res) => {
+// ==========================================
+// ROTAS DE COMENTÁRIOS, AVALIAÇÕES E CURTIDAS
+// ==========================================
+
+// Buscar comentários do evento (Ordenado do mais recente para o mais antigo)
+app.get('/api/eventos/:id/comentarios', async (req, res) => {
   const { id } = req.params;
-  const { tipo_usuario, nome_usuario, email } = req.body;
+  try {
+    const sql = `
+      SELECT c.*, u.nome_usuario, u.foto_perfil,
+             (SELECT COUNT(*) FROM CurtidasComentarios cur WHERE cur.id_comentario = c.id_comentario) AS curtidas,
+             ARRAY(SELECT id_usuario FROM CurtidasComentarios cur WHERE cur.id_comentario = c.id_comentario) AS usuarios_curtiram
+      FROM ComentariosEventos c
+      JOIN Usuarios u ON c.id_usuario = u.id_usuario
+      WHERE c.id_evento = $1
+      ORDER BY c.id_comentario DESC;
+    `;
+    const resultado = await db.query(sql, [id]);
+    res.json(resultado.rows);
+  } catch (err) {
+    console.error('Erro ao buscar comentários:', err);
+    res.status(500).json({ erro: 'Erro ao buscar comentários.' });
+  }
+});
+
+// Adicionar ou atualizar comentário/avaliação
+app.post('/api/eventos/:id/comentarios', async (req, res) => {
+  const { id } = req.params;
+  const { id_usuario, texto_comentario, nota_avaliacao, id_comentario_pai } = req.body;
+
+  if (!id_usuario) {
+    return res.status(400).json({ erro: 'ID do utilizador é obrigatório.' });
+  }
+
+  try {
+    const textoTratado = (texto_comentario || '').trim();
+    const notaTratada = nota_avaliacao || 5;
+
+    // 1. Verifica se o usuário já possui qualquer registro (comentário ou avaliação) neste evento
+    const registrosExistentes = await db.query(
+      'SELECT id_comentario FROM ComentariosEventos WHERE id_evento = $1 AND id_usuario = $2',
+      [id, id_usuario]
+    );
+
+    // 2. SE FOR APENAS ENVIO/EDIÇÃO DE NOTA (sem texto novo e sem ser resposta) E O USUÁRIO JÁ TEM REGISTROS:
+    if (textoTratado === '' && !id_comentario_pai && registrosExistentes.rows.length > 0) {
+      await db.query(
+        'UPDATE ComentariosEventos SET nota_avaliacao = $1 WHERE id_evento = $2 AND id_usuario = $3',
+        [notaTratada, id, id_usuario]
+      );
+
+      return res.json({ 
+        mensagem: 'Avaliação atualizada com sucesso!',
+        comentario: { id_usuario, nota_avaliacao: notaTratada }
+      });
+    }
+
+    // 3. CASO CONTRÁRIO (Novo comentário com texto, resposta, ou primeira avaliação da conta):
+    if (registrosExistentes.rows.length > 0) {
+      await db.query(
+        'UPDATE ComentariosEventos SET nota_avaliacao = $1 WHERE id_evento = $2 AND id_usuario = $3',
+        [notaTratada, id, id_usuario]
+      );
+    }
+
+    // Insere o novo comentário/resposta
+    const sql = `
+      INSERT INTO ComentariosEventos (id_evento, id_usuario, nome_usuario, texto_comentario, nota_avaliacao, id_comentario_pai)
+      SELECT $1, $2, u.nome_usuario, $3, $4, $5
+      FROM Usuarios u WHERE u.id_usuario = $2
+      RETURNING *;
+    `;
+    const valores = [id, id_usuario, textoTratado, notaTratada, id_comentario_pai || null];
+
+    const resultado = await db.query(sql, valores);
+    
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Utilizador não encontrado.' });
+    }
+
+    res.status(201).json({ 
+      mensagem: 'Comentário/Avaliação registrada com sucesso!', 
+      comentario: resultado.rows[0] 
+    });
+  } catch (err) {
+    console.error('Erro ao salvar comentário/avaliação:', err);
+    res.status(500).json({ erro: 'Erro ao registrar comentário/avaliação.' });
+  }
+});
+
+// Sistema de Curtida Única
+app.post('/api/comentarios/:id/curtir', async (req, res) => {
+  const { id } = req.params;
+  const { id_usuario } = req.body;
+
+  if (!id_usuario) {
+    return res.status(400).json({ erro: 'ID do utilizador é obrigatório para curtir.' });
+  }
+
+  try {
+    const checagem = await db.query(
+      'SELECT * FROM CurtidasComentarios WHERE id_comentario = $1 AND id_usuario = $2', 
+      [id, id_usuario]
+    );
+    
+    if (checagem.rows.length > 0) {
+      await db.query(
+        'DELETE FROM CurtidasComentarios WHERE id_comentario = $1 AND id_usuario = $2', 
+        [id, id_usuario]
+      );
+      res.json({ curtiu: false, mensagem: 'Curtida removida.' });
+    } else {
+      await db.query(
+        'INSERT INTO CurtidasComentarios (id_comentario, id_usuario) VALUES ($1, $2)', 
+        [id, id_usuario]
+      );
+      res.json({ curtiu: true, mensagem: 'Curtida registrada!' });
+    }
+  } catch (err) {
+    console.error('Erro ao processar curtida:', err);
+    res.status(500).json({ erro: 'Erro ao processar curtida.' });
+  }
+});
+
+// ==========================================
+// ROTAS DE PERFIL E SEGURANÇA DO UTILIZADOR
+// ==========================================
+
+app.put('/api/usuarios/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nome_usuario, email, telefone } = req.body;
+
+  try {
+    const emailTratado = email ? email.toLowerCase().trim() : null;
+    
+    const sql = `
+      UPDATE Usuarios 
+      SET nome_usuario = COALESCE($1, nome_usuario),
+          email = COALESCE($2, email),
+          telefone = COALESCE($3, telefone)
+      WHERE id_usuario = $4
+      RETURNING id_usuario, nome_usuario, email, telefone, tipo_usuario, foto_perfil;
+    `;
+
+    const valores = [nome_usuario, emailTratado, telefone, id];
+    const resultado = await db.query(sql, valores);
+
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Utilizador não encontrado.' });
+    }
+
+    res.json({ 
+      mensagem: 'Perfil atualizado com sucesso!', 
+      usuario: resultado.rows[0] 
+    });
+  } catch (err) {
+    console.error('Erro ao atualizar perfil:', err);
+    res.status(500).json({ erro: 'Erro ao atualizar perfil na base de dados.' });
+  }
+});
+
+app.put('/api/usuarios/:id/foto', async (req, res) => {
+  const { id } = req.params;
+  const { foto_perfil } = req.body;
 
   try {
     await db.query(
-      'UPDATE Usuarios SET tipo_usuario = $1, nome_usuario = $2, email = $3 WHERE id_usuario = $4',
-      [tipo_usuario, nome_usuario, email, id]
+      'UPDATE Usuarios SET foto_perfil = $1 WHERE id_usuario = $2', 
+      [foto_perfil, id]
     );
-    res.json({ mensagem: 'Usuário atualizado com sucesso!' });
+    res.json({ mensagem: 'Foto atualizada com sucesso no banco de dados!' });
   } catch (err) {
-    console.error('Erro ao atualizar usuário:', err);
-    res.status(500).json({ erro: 'Erro ao atualizar usuário.' });
+    console.error('Erro ao atualizar foto:', err);
+    res.status(500).json({ erro: 'Erro ao salvar a foto de perfil.' });
   }
 });
 
-// Excluir conta de usuário pelo Admin
-app.delete('/api/admin/usuarios/:id', async (req, res) => {
+app.put('/api/usuarios/:id/senha', async (req, res) => {
   const { id } = req.params;
+  const { senha_atual, nova_senha } = req.body;
 
   try {
-    await db.query('DELETE FROM Usuarios WHERE id_usuario = $1', [id]);
-    res.json({ mensagem: 'Usuário excluído com sucesso!' });
+    const usuarioRes = await db.query('SELECT senha FROM Usuarios WHERE id_usuario = $1', [id]);
+
+    if (usuarioRes.rows.length === 0) {
+      return res.status(404).json({ erro: 'Utilizador não encontrado.' });
+    }
+
+    const usuario = usuarioRes.rows[0];
+
+    if (usuario.senha !== senha_atual) {
+      return res.status(400).json({ erro: 'Senha atual inválida.' });
+    }
+
+    await db.query('UPDATE Usuarios SET senha = $1 WHERE id_usuario = $2', [nova_senha, id]);
+
+    res.json({ mensagem: 'Palavra-passe alterada com sucesso!' });
   } catch (err) {
-    console.error('Erro ao excluir usuário:', err);
-    res.status(500).json({ erro: 'Erro ao excluir usuário.' });
+    console.error('Erro ao alterar senha:', err);
+    res.status(500).json({ erro: 'Erro no servidor ao alterar palavra-passe.' });
   }
 });
 
-// INICIALIZAÇÃO DO SERVIDOR
 const PORTA = 3000;
 app.listen(PORTA, () => {
   console.log(`Servidor a rodar na porta ${PORTA}`);
