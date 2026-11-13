@@ -138,34 +138,59 @@ app.get('/api/eventos', async (req, res) => {
 
 app.post('/api/eventos', async (req, res) => {
   const {
-    nome_evento, imagem, galeria_imagens, modalidade, cidade, estado, cep, bairro, rua_numero,
-    data_inicio, horario_inicio, data_fim, horario_fim, descricao_evento,
-    tipo_ingresso, tech, plataforma_online, url_inscricao, nome_produtor,
+    titulo, nome_evento, imagem, galeria_imagens, modalidade, formato, cidade, estado, cep, bairro, rua_numero,
+    data_inicio, horario_inicio, data_fim, horario_fim, descricao, descricao_evento,
+    tipo_ingresso, preco, tech, plataforma_online, url_inscricao, link_oficial, nome_produtor, 
     descricao_produtor, id_tipo_evento = 1 
   } = req.body;
 
   try {
+    const nomeEventoFinal = nome_evento || titulo;
+    const descricaoFinal = descricao_evento || descricao;
+    const modalidadeFinal = modalidade || formato;
+    const ingressoFinal = tipo_ingresso || preco;
+
     const dataTratada = data_inicio && data_inicio.trim() !== '' ? data_inicio : new Date().toISOString().split('T')[0];
     const horaTratada = horario_inicio && horario_inicio.trim() !== '' ? horario_inicio : '08:00:00';
-    const descricaoTratada = descricao_evento && descricao_evento.trim() !== '' ? descricao_evento : 'Evento sem descrição informada.';
-    const galeriaString = galeria_imagens ? JSON.stringify(galeria_imagens) : null;
+    
+    const horaFimTratada = horario_fim && horario_fim.trim() !== '' ? horario_fim : '23:59:00';
+    const dataFimTratada = data_fim && data_fim.trim() !== '' ? data_fim : dataTratada;
+
+    const descricaoTratada = descricaoFinal && descricaoFinal.trim() !== '' ? descricaoFinal : 'Evento sem descrição informada.';
+    const galeriaString = galeria_imagens ? (typeof galeria_imagens === 'string' ? galeria_imagens : JSON.stringify(galeria_imagens)) : null;
 
     const sql = `
       INSERT INTO Eventos (
         id_tipo_evento, nome_evento, imagem, galeria_imagens, modalidade, cidade, estado, cep, bairro, rua_numero,
         data_inicio, horario_inicio, data_fim, horario_fim, descricao_evento,
-        tipo_ingresso, tech, plataforma_online, url_inscricao, nome_produtor, descricao_produtor, data_publicacao
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW())
+        tipo_ingresso, tech, plataforma_online, url_inscricao, link_oficial, nome_produtor, descricao_produtor, data_publicacao
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, NOW())
       RETURNING *;
     `;
 
     const valores = [
-      id_tipo_evento, nome_evento, 
+      id_tipo_evento, 
+      nomeEventoFinal, 
       imagem || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&q=80&w=600',
       galeriaString,
-      modalidade || 'Presencial', cidade || 'Salvador', estado, cep, bairro, rua_numero,
-      dataTratada, horaTratada, data_fim || null, horario_fim || null, descricaoTratada,
-      tipo_ingresso || 'Gratuito', tech, plataforma_online, url_inscricao, nome_produtor, descricao_produtor
+      modalidadeFinal || 'Presencial', 
+      cidade || 'Salvador', 
+      estado || null, 
+      cep || null, 
+      bairro || null, 
+      rua_numero || null,
+      dataTratada, 
+      horaTratada, 
+      dataFimTratada, 
+      horaFimTratada, 
+      descricaoTratada,
+      ingressoFinal || 'Gratuito', 
+      tech || 'Geral', 
+      plataforma_online || null, 
+      url_inscricao || null, 
+      link_oficial || null, 
+      nome_produtor || 'Não informado', // Fallback perfeito caso não receba dados
+      descricao_produtor || null
     ];
 
     const resultado = await db.query(sql, valores);
@@ -179,30 +204,33 @@ app.post('/api/eventos', async (req, res) => {
 app.put('/api/eventos/:id', async (req, res) => {
   const { id } = req.params;
   const {
-    nome_evento, imagem, galeria_imagens, modalidade, cidade, estado, cep, bairro, rua_numero,
-    data_inicio, horario_inicio, data_fim, horario_fim, descricao_evento,
-    tipo_ingresso, tech, plataforma_online, url_inscricao, nome_produtor, descricao_produtor
+    titulo, nome_evento, imagem, galeria_imagens, modalidade, formato, cidade, estado, cep, bairro, rua_numero,
+    data_inicio, horario_inicio, data_fim, horario_fim, descricao, descricao_evento,
+    tipo_ingresso, preco, tech, plataforma_online, url_inscricao, link_oficial, nome_produtor, descricao_produtor
   } = req.body;
 
   try {
-    const descricaoTratada = descricao_evento && descricao_evento.trim() !== '' ? descricao_evento : 'Evento sem descrição informada.';
-    const galeriaString = galeria_imagens ? JSON.stringify(galeria_imagens) : null;
+    const nomeEventoFinal = nome_evento || titulo;
+    const descricaoTratada = (descricao_evento || descricao) && (descricao_evento || descricao).trim() !== '' ? (descricao_evento || descricao) : 'Evento sem descrição informada.';
+    const galeriaString = galeria_imagens ? (typeof galeria_imagens === 'string' ? galeria_imagens : JSON.stringify(galeria_imagens)) : null;
+    const modalidadeFinal = modalidade || formato;
+    const ingressoFinal = tipo_ingresso || preco;
 
     const sql = `
       UPDATE Eventos SET
         nome_evento = $1, imagem = $2, galeria_imagens = $3, modalidade = $4, cidade = $5, estado = $6, cep = $7,
         bairro = $8, rua_numero = $9, data_inicio = $10, horario_inicio = $11, data_fim = $12, horario_fim = $13,
         descricao_evento = $14, tipo_ingresso = $15, tech = $16, plataforma_online = $17,
-        url_inscricao = $18, nome_produtor = $19, descricao_produtor = $20
-      WHERE id_evento = $21
+        url_inscricao = $18, link_oficial = $19, nome_produtor = $20, descricao_produtor = $21
+      WHERE id_evento = $22
       RETURNING *;
     `;
 
     const valores = [
-      nome_evento, imagem, galeriaString, modalidade, cidade || 'Salvador', estado, cep,
-      bairro, rua_numero, data_inicio, horario_inicio, data_fim || null, horario_fim || null,
-      descricaoTratada, tipo_ingresso, tech, plataforma_online,
-      url_inscricao, nome_produtor, descricao_produtor, id
+      nomeEventoFinal, imagem, galeriaString, modalidadeFinal, cidade || 'Salvador', estado || null, cep || null,
+      bairro || null, rua_numero || null, data_inicio, horario_inicio || '08:00:00', data_fim || null, horario_fim || null,
+      descricaoTratada, ingressoFinal || 'Gratuito', tech || 'Geral', plataforma_online || null,
+      url_inscricao || null, link_oficial || null, nome_produtor || 'Não informado', descricao_produtor || null, id
     ];
 
     const resultado = await db.query(sql, valores);
@@ -257,7 +285,6 @@ app.get('/api/admin/usuarios', async (req, res) => {
 // ROTAS DE COMENTÁRIOS, AVALIAÇÕES E CURTIDAS
 // ==========================================
 
-// Buscar comentários do evento (Ordenado do mais recente para o mais antigo)
 app.get('/api/eventos/:id/comentarios', async (req, res) => {
   const { id } = req.params;
   try {
@@ -278,7 +305,6 @@ app.get('/api/eventos/:id/comentarios', async (req, res) => {
   }
 });
 
-// Adicionar ou atualizar comentário/avaliação
 app.post('/api/eventos/:id/comentarios', async (req, res) => {
   const { id } = req.params;
   const { id_usuario, texto_comentario, nota_avaliacao, id_comentario_pai } = req.body;
@@ -291,13 +317,11 @@ app.post('/api/eventos/:id/comentarios', async (req, res) => {
     const textoTratado = (texto_comentario || '').trim();
     const notaTratada = nota_avaliacao || 5;
 
-    // 1. Verifica se o usuário já possui qualquer registro (comentário ou avaliação) neste evento
     const registrosExistentes = await db.query(
       'SELECT id_comentario FROM ComentariosEventos WHERE id_evento = $1 AND id_usuario = $2',
       [id, id_usuario]
     );
 
-    // 2. SE FOR APENAS ENVIO/EDIÇÃO DE NOTA (sem texto novo e sem ser resposta) E O USUÁRIO JÁ TEM REGISTROS:
     if (textoTratado === '' && !id_comentario_pai && registrosExistentes.rows.length > 0) {
       await db.query(
         'UPDATE ComentariosEventos SET nota_avaliacao = $1 WHERE id_evento = $2 AND id_usuario = $3',
@@ -310,7 +334,6 @@ app.post('/api/eventos/:id/comentarios', async (req, res) => {
       });
     }
 
-    // 3. CASO CONTRÁRIO (Novo comentário com texto, resposta, ou primeira avaliação da conta):
     if (registrosExistentes.rows.length > 0) {
       await db.query(
         'UPDATE ComentariosEventos SET nota_avaliacao = $1 WHERE id_evento = $2 AND id_usuario = $3',
@@ -318,7 +341,6 @@ app.post('/api/eventos/:id/comentarios', async (req, res) => {
       );
     }
 
-    // Insere o novo comentário/resposta
     const sql = `
       INSERT INTO ComentariosEventos (id_evento, id_usuario, nome_usuario, texto_comentario, nota_avaliacao, id_comentario_pai)
       SELECT $1, $2, u.nome_usuario, $3, $4, $5
@@ -343,7 +365,6 @@ app.post('/api/eventos/:id/comentarios', async (req, res) => {
   }
 });
 
-// Sistema de Curtida Única
 app.post('/api/comentarios/:id/curtir', async (req, res) => {
   const { id } = req.params;
   const { id_usuario } = req.body;
