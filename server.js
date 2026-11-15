@@ -152,7 +152,6 @@ app.post('/api/eventos', async (req, res) => {
 
     const dataTratada = data_inicio && data_inicio.trim() !== '' ? data_inicio : new Date().toISOString().split('T')[0];
     const horaTratada = horario_inicio && horario_inicio.trim() !== '' ? horario_inicio : '08:00:00';
-    
     const horaFimTratada = horario_fim && horario_fim.trim() !== '' ? horario_fim : '23:59:00';
     const dataFimTratada = data_fim && data_fim.trim() !== '' ? data_fim : dataTratada;
 
@@ -189,12 +188,28 @@ app.post('/api/eventos', async (req, res) => {
       plataforma_online || null, 
       url_inscricao || null, 
       link_oficial || null, 
-      nome_produtor || 'Não informado', // Fallback perfeito caso não receba dados
+      nome_produtor || 'Não informado',
       descricao_produtor || null
     ];
 
     const resultado = await db.query(sql, valores);
-    res.status(201).json({ mensagem: 'Evento criado com sucesso!', evento: resultado.rows[0] });
+    const eventoCriado = resultado.rows[0];
+
+    try {
+      await db.query(
+        `INSERT INTO Notificacoes (id_usuario_destino, id_evento, tipo, titulo, mensagem)
+         SELECT id_usuario, $1, 'novo_evento', 'Novo evento disponível!', $2
+         FROM Usuarios`,
+        [
+          eventoCriado.id_evento,
+          `O evento "${eventoCriado.nome_evento}" (${eventoCriado.tech || 'Tech'}) acabou de ser publicado.`
+        ]
+      );
+    } catch (notifErr) {
+      console.error('Aviso: falha ao gerar notificações de novo evento:', notifErr.message);
+    }
+
+    res.status(201).json({ mensagem: 'Evento criado com sucesso!', evento: eventoCriado });
   } catch (err) {
     console.error('Erro ao criar evento:', err);
     res.status(500).json({ erro: 'Erro ao criar evento.' });
@@ -244,6 +259,7 @@ app.put('/api/eventos/:id', async (req, res) => {
 app.delete('/api/eventos/:id', async (req, res) => {
   const { id } = req.params;
   try {
+    await db.query('DELETE FROM ComentariosEventos WHERE id_evento = $1', [id]);
     await db.query('DELETE FROM Eventos WHERE id_evento = $1', [id]);
     res.json({ mensagem: 'Evento excluído com sucesso!' });
   } catch (err) {
@@ -256,13 +272,29 @@ app.delete('/api/eventos/:id', async (req, res) => {
 // ROTAS EXCLUSIVAS DE ADMINISTRAÇÃO PAINEL
 // ==========================================
 
+// 1. Métricas Completas
 app.get('/api/admin/metricas', async (req, res) => {
   try {
     const totalUsuarios = await db.query('SELECT COUNT(*) FROM Usuarios');
     const totalEventos = await db.query('SELECT COUNT(*) FROM Eventos');
+    const totalComentarios = await db.query('SELECT COUNT(*) FROM ComentariosEventos');
+    const mediaGeral = await db.query(
+      'SELECT COALESCE(ROUND(AVG(nota_avaliacao), 1), 0.0) AS media FROM ComentariosEventos WHERE nota_avaliacao IS NOT NULL'
+    );
+    const porModalidade = await db.query(
+      `SELECT COALESCE(modalidade, 'Presencial') AS modalidade, COUNT(*)::int AS total FROM Eventos GROUP BY modalidade`
+    );
+    const topTechs = await db.query(
+      `SELECT COALESCE(tech, 'Geral') AS tech, COUNT(*)::int AS total FROM Eventos GROUP BY tech ORDER BY total DESC LIMIT 5`
+    );
+
     res.json({
       totalUsuarios: parseInt(totalUsuarios.rows[0].count, 10),
       totalEventos: parseInt(totalEventos.rows[0].count, 10),
+      totalComentarios: parseInt(totalComentarios.rows[0].count, 10),
+      mediaAvaliacoes: parseFloat(mediaGeral.rows[0].media || 0).toFixed(1),
+      porModalidade: porModalidade.rows,
+      topTechs: topTechs.rows,
       statusSistema: 'Online'
     });
   } catch (err) {
@@ -271,13 +303,131 @@ app.get('/api/admin/metricas', async (req, res) => {
   }
 });
 
+// 2. Gestão de Usuários (Suporte a Cadastros)
 app.get('/api/admin/usuarios', async (req, res) => {
   try {
-    const resultado = await db.query('SELECT id_usuario, nome_usuario, email, tipo_usuario, telefone FROM Usuarios ORDER BY id_usuario DESC');
+    const resultado = await db.query(
+      'SELECT id_usuario, nome_usuario, email, tipo_usuario, telefone, cpf_cnpj FROM Usuarios ORDER BY id_usuario DESC'
+    );
     res.json(resultado.rows);
   } catch (err) {
     console.error('Erro ao buscar usuários:', err);
     res.status(500).json({ erro: 'Erro ao buscar usuários.' });
+  }
+});
+
+app.put('/api/admin/usuarios/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nome_usuario, email, telefone, tipo_usuario, nova_senha } = req.body;
+
+  try {
+    const emailTratado = email ? email.toLowerCase().trim() : null;
+
+    if (emailTratado) {
+      const duplicado = await db.query(
+        'SELECT id_usuario FROM Usuarios WHERE LOWER(TRIM(email)) = $1 AND id_usuario <> $2',
+        [emailTratado, id]
+      );
+      if (duplicado.rows.length > 0) {
+        return res.status(400).json({ erro: 'Já existe outro utilizador com este e-mail.' });
+      }
+    }
+
+    const sql = `
+      UPDATE Usuarios
+      SET nome_usuario = COALESCE($1, nome_usuario),
+          email = COALESCE($2, email),
+          telefone = COALESCE($3, telefone),
+          tipo_usuario = COALESCE($4, tipo_usuario)
+      WHERE id_usuario = $5
+      RETURNING id_usuario, nome_usuario, email, tipo_usuario, telefone, cpf_cnpj;
+    `;
+    const resultado = await db.query(sql, [
+      nome_usuario?.trim() || null,
+      emailTratado,
+      telefone?.trim() || null,
+      tipo_usuario || null,
+      id
+    ]);
+
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ erro: 'Utilizador não encontrado.' });
+    }
+
+    // Se o admin definiu uma nova senha para resolver problema de acesso
+    if (nova_senha && nova_senha.trim() !== '') {
+      await db.query('UPDATE Usuarios SET senha = $1 WHERE id_usuario = $2', [nova_senha.trim(), id]);
+    }
+
+    res.json({ mensagem: 'Cadastro atualizado com sucesso!', usuario: resultado.rows[0] });
+  } catch (err) {
+    console.error('Erro ao atualizar utilizador pelo admin:', err);
+    res.status(500).json({ erro: 'Erro ao atualizar cadastro.' });
+  }
+});
+
+app.delete('/api/admin/usuarios/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await db.query('DELETE FROM CurtidasComentarios WHERE id_usuario = $1', [id]);
+    await db.query('DELETE FROM ComentariosEventos WHERE id_usuario = $1', [id]);
+    await db.query('DELETE FROM Notificacoes WHERE id_usuario_destino = $1 OR id_usuario_origem = $1', [id]);
+    await db.query('DELETE FROM Usuarios WHERE id_usuario = $1', [id]);
+    res.json({ mensagem: 'Utilizador removido com sucesso!' });
+  } catch (err) {
+    console.error('Erro ao excluir utilizador:', err);
+    res.status(500).json({ erro: 'Erro ao excluir utilizador.' });
+  }
+});
+
+// 3. Moderação de Comentários
+app.get('/api/admin/comentarios', async (req, res) => {
+  try {
+    const sql = `
+      SELECT c.*, u.nome_usuario, u.email, e.nome_evento
+      FROM ComentariosEventos c
+      LEFT JOIN Usuarios u ON c.id_usuario = u.id_usuario
+      LEFT JOIN Eventos e ON c.id_evento = e.id_evento
+      ORDER BY c.id_comentario DESC
+      LIMIT 100;
+    `;
+    const resultado = await db.query(sql);
+    res.json(resultado.rows);
+  } catch (err) {
+    console.error('Erro ao listar comentários no admin:', err);
+    res.status(500).json({ erro: 'Erro ao carregar comentários.' });
+  }
+});
+
+app.delete('/api/admin/comentarios/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await db.query('DELETE FROM CurtidasComentarios WHERE id_comentario = $1', [id]);
+    await db.query('DELETE FROM ComentariosEventos WHERE id_comentario_pai = $1', [id]);
+    await db.query('DELETE FROM ComentariosEventos WHERE id_comentario = $1', [id]);
+    res.json({ mensagem: 'Comentário removido com sucesso!' });
+  } catch (err) {
+    console.error('Erro ao apagar comentário:', err);
+    res.status(500).json({ erro: 'Erro ao apagar comentário.' });
+  }
+});
+
+// 4. Comunicado Global (Broadcast para todos os usuários)
+app.post('/api/admin/notificacoes/broadcast', async (req, res) => {
+  const { titulo, mensagem } = req.body;
+  if (!titulo || !mensagem) {
+    return res.status(400).json({ erro: 'Título e mensagem são obrigatórios.' });
+  }
+  try {
+    await db.query(
+      `INSERT INTO Notificacoes (id_usuario_destino, tipo, titulo, mensagem)
+       SELECT id_usuario, 'novo_evento', $1, $2 FROM Usuarios`,
+      [titulo.trim(), mensagem.trim()]
+    );
+    res.status(201).json({ mensagem: 'Comunicado enviado para todos os utilizadores!' });
+  } catch (err) {
+    console.error('Erro ao enviar comunicado:', err);
+    res.status(500).json({ erro: 'Erro ao enviar comunicado global.' });
   }
 });
 
@@ -355,9 +505,33 @@ app.post('/api/eventos/:id/comentarios', async (req, res) => {
       return res.status(404).json({ erro: 'Utilizador não encontrado.' });
     }
 
+    const novoRegistro = resultado.rows[0];
+
+    if (id_comentario_pai && textoTratado !== '') {
+      try {
+        const paiRes = await db.query(
+          'SELECT id_usuario FROM ComentariosEventos WHERE id_comentario = $1',
+          [id_comentario_pai]
+        );
+        if (paiRes.rows.length > 0) {
+          const idAutorPai = paiRes.rows[0].id_usuario;
+          if (String(idAutorPai) !== String(id_usuario)) {
+            const trecho = textoTratado.length > 70 ? `${textoTratado.substring(0, 70)}...` : textoTratado;
+            await db.query(
+              `INSERT INTO Notificacoes (id_usuario_destino, id_usuario_origem, id_evento, tipo, titulo, mensagem)
+               VALUES ($1, $2, $3, 'resposta', 'Responderam ao seu comentário', $4)`,
+              [idAutorPai, id_usuario, id, `${novoRegistro.nome_usuario} respondeu: "${trecho}"`]
+            );
+          }
+        }
+      } catch (notifErr) {
+        console.error('Aviso: falha ao gerar notificação de resposta:', notifErr.message);
+      }
+    }
+
     res.status(201).json({ 
       mensagem: 'Comentário/Avaliação registrada com sucesso!', 
-      comentario: resultado.rows[0] 
+      comentario: novoRegistro 
     });
   } catch (err) {
     console.error('Erro ao salvar comentário/avaliação:', err);
@@ -390,11 +564,90 @@ app.post('/api/comentarios/:id/curtir', async (req, res) => {
         'INSERT INTO CurtidasComentarios (id_comentario, id_usuario) VALUES ($1, $2)', 
         [id, id_usuario]
       );
+
+      try {
+        const comentarioRes = await db.query(
+          'SELECT id_usuario, id_evento, texto_comentario FROM ComentariosEventos WHERE id_comentario = $1',
+          [id]
+        );
+        const origemRes = await db.query(
+          'SELECT nome_usuario FROM Usuarios WHERE id_usuario = $1',
+          [id_usuario]
+        );
+
+        if (comentarioRes.rows.length > 0 && origemRes.rows.length > 0) {
+          const autorComentario = comentarioRes.rows[0].id_usuario;
+          const idEvento = comentarioRes.rows[0].id_evento;
+          const textoComent = comentarioRes.rows[0].texto_comentario || '';
+          const nomeCurtiu = origemRes.rows[0].nome_usuario;
+
+          if (String(autorComentario) !== String(id_usuario)) {
+            const resumo = textoComent.length > 50 ? `${textoComent.substring(0, 50)}...` : textoComent;
+            const msg = resumo
+              ? `${nomeCurtiu} curtiu o seu comentário: "${resumo}"`
+              : `${nomeCurtiu} curtiu a sua avaliação.`;
+
+            await db.query(
+              `INSERT INTO Notificacoes (id_usuario_destino, id_usuario_origem, id_evento, tipo, titulo, mensagem)
+               VALUES ($1, $2, $3, 'curtida', 'Nova curtida no seu comentário', $4)`,
+              [autorComentario, id_usuario, idEvento, msg]
+            );
+          }
+        }
+      } catch (notifErr) {
+        console.error('Aviso: falha ao gerar notificação de curtida:', notifErr.message);
+      }
+
       res.json({ curtiu: true, mensagem: 'Curtida registrada!' });
     }
   } catch (err) {
     console.error('Erro ao processar curtida:', err);
     res.status(500).json({ erro: 'Erro ao processar curtida.' });
+  }
+});
+
+// ==========================================
+// ROTAS DE NOTIFICAÇÕES
+// ==========================================
+
+app.get('/api/usuarios/:id/notificacoes', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const sql = `
+      SELECT n.*, e.nome_evento
+      FROM Notificacoes n
+      LEFT JOIN Eventos e ON n.id_evento = e.id_evento
+      WHERE n.id_usuario_destino = $1
+      ORDER BY n.data_criacao DESC
+      LIMIT 50;
+    `;
+    const resultado = await db.query(sql, [id]);
+    res.json(resultado.rows);
+  } catch (err) {
+    console.error('Erro ao buscar notificações:', err);
+    res.status(500).json({ erro: 'Erro ao buscar notificações.' });
+  }
+});
+
+app.put('/api/notificacoes/:id/ler', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await db.query('UPDATE Notificacoes SET lida = TRUE WHERE id_notificacao = $1', [id]);
+    res.json({ mensagem: 'Notificação marcada como lida.' });
+  } catch (err) {
+    console.error('Erro ao marcar notificação como lida:', err);
+    res.status(500).json({ erro: 'Erro ao atualizar notificação.' });
+  }
+});
+
+app.put('/api/usuarios/:id/notificacoes/ler-todas', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await db.query('UPDATE Notificacoes SET lida = TRUE WHERE id_usuario_destino = $1', [id]);
+    res.json({ mensagem: 'Todas as notificações foram marcadas como lidas.' });
+  } catch (err) {
+    console.error('Erro ao marcar todas como lidas:', err);
+    res.status(500).json({ erro: 'Erro ao atualizar notificações.' });
   }
 });
 
